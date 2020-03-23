@@ -17,9 +17,11 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
+	"github.com/prometheus/prometheus/tsdb/tsdbutil"
 	"github.com/thanos-io/thanos/pkg/component"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
 	"github.com/thanos-io/thanos/pkg/testutil"
+	"github.com/thanos-io/thanos/pkg/testutil/benchutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -1398,35 +1400,35 @@ func (c *StoreSeriesClient) Recv() (*storepb.SeriesResponse, error) {
 	return s, nil
 }
 
+type sample struct {
+	t int64
+	v float64
+}
+
+func (s sample) T() int64   { return s.t }
+func (s sample) V() float64 { return s.v }
+
 func (c *StoreSeriesClient) Context() context.Context {
 	return c.ctx
 }
 
+type samples []sample
+
+func (s samples) Len() int { return len(s) }
+func (s samples) Get(i int) tsdbutil.Sample {
+	return s[i]
+}
+
+type sampleChunks [][]sample
+
+func (c sampleChunks) Len() int { return len(c) }
+func (c sampleChunks) Get(i int) benchutil.Samples {
+	return samples(c[i])
+}
+
 // storeSeriesResponse creates test storepb.SeriesResponse that includes series with single chunk that stores all the given samples.
 func storeSeriesResponse(t testing.TB, lset labels.Labels, smplChunks ...[]sample) *storepb.SeriesResponse {
-	var s storepb.Series
-
-	for _, l := range lset {
-		s.Labels = append(s.Labels, storepb.Label{Name: l.Name, Value: l.Value})
-	}
-
-	for _, smpls := range smplChunks {
-		c := chunkenc.NewXORChunk()
-		a, err := c.Appender()
-		testutil.Ok(t, err)
-
-		for _, smpl := range smpls {
-			a.Append(smpl.t, smpl.v)
-		}
-
-		ch := storepb.AggrChunk{
-			MinTime: smpls[0].t,
-			MaxTime: smpls[len(smpls)-1].t,
-			Raw:     &storepb.Chunk{Type: storepb.Chunk_XOR, Data: c.Bytes()},
-		}
-
-		s.Chunks = append(s.Chunks, ch)
-	}
+	s := benchutil.NewTestSeries(t, lset, sampleChunks(smplChunks))
 	return storepb.NewSeriesResponse(&s)
 }
 
